@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hệ thống giám sát vườn cây IoT</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: #183044; background: #f2f6fa; }
+    header { background:#174a63; color:white; padding:22px 6%; display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; }
+    header h1 { margin:0; font-size:23px; }
+    #connection { padding:9px 13px; border-radius:20px; background:#8a4b12; font-size:14px; }
+    main { max-width:1100px; margin:30px auto; padding:0 18px; }
+    .intro { color:#617486; margin-bottom:22px; }
+    .cards,.charts,.controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:18px; }
+    .card,.chart-card,.panel,.info { background:white; border-radius:16px; padding:22px; box-shadow:0 5px 18px rgba(25,55,75,.08); }
+    .label { color:#64798a; font-size:15px; }
+    .value { font-size:42px; font-weight:700; margin:16px 0 6px; }
+    .temp { color:#e17a32; } .humi { color:#1685b5; }
+    .unit { color:#7a8c99; }
+    h2 { margin:30px 0 14px; font-size:19px; }
+    .chart-card { height:320px; min-width:0; }
+    .chart-card h3 { margin:0 0 16px; font-size:16px; color:#43596a; }
+    .chart-wrap { position:relative; height:245px; }
+    .panel h3 { margin:0 0 14px; }
+    .mode-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    button { border:0; border-radius:9px; padding:11px 17px; cursor:pointer; font-size:14px; font-weight:600; background:#dce6ed; color:#183044; }
+    button.active { background:#17617d; color:white; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .device-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid #edf1f4; }
+    .device-row:last-child { border-bottom:0; }
+    .state { font-weight:700; color:#657887; }
+    .state.on { color:#21834f; }
+    .note { color:#6e7f8c; font-size:13px; line-height:1.5; margin-top:12px; }
+    .info { color:#5d7180; line-height:1.8; overflow-wrap:anywhere; }
+    .topic { font-family:Consolas,monospace; color:#174a63; }
+    footer { text-align:center; color:#82919b; padding:28px 12px; font-size:13px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Hệ thống giám sát vườn cây IoT</h1>
+  <div id="connection">Đang kết nối MQTT...</div>
+</header>
+<main>
+  <p class="intro">Theo dõi nhiệt độ, độ ẩm và điều khiển mô hình bơm/quạt qua MQTT.</p>
+
+  <section class="cards">
+    <article class="card">
+      <div class="label">Nhiệt độ môi trường</div>
+      <div class="value temp" id="temperature">--.-</div><div class="unit">°C</div>
+    </article>
+    <article class="card">
+      <div class="label">Độ ẩm môi trường</div>
+      <div class="value humi" id="humidity">--.-</div><div class="unit">%</div>
+    </article>
+  </section>
+
+  <h2>Biểu đồ theo thời gian thực</h2>
+  <section class="charts">
+    <article class="chart-card"><h3>Nhiệt độ (°C)</h3><div class="chart-wrap"><canvas id="temperatureChart"></canvas></div></article>
+    <article class="chart-card"><h3>Độ ẩm (%)</h3><div class="chart-wrap"><canvas id="humidityChart"></canvas></div></article>
+  </section>
+
+  <h2>Điều khiển thiết bị</h2>
+  <section class="controls">
+    <article class="panel">
+      <h3>Chế độ hoạt động</h3>
+      <div class="mode-row">
+        <button id="autoBtn" class="active" type="button">AUTO</button>
+        <button id="manualBtn" type="button">MANUAL</button>
+      </div>
+      <p class="note">AUTO: ESP32 tự điều khiển theo độ ẩm. MANUAL: dùng các nút bật/tắt bên dưới.</p>
+      <p>Chế độ hiện tại: <b id="modeState">AUTO</b></p>
+    </article>
+    <article class="panel">
+      <h3>Điều khiển bơm</h3>
+      <div class="device-row"><span>Trạng thái</span><span class="state" id="pumpState">Chưa xác định</span></div>
+      <div class="mode-row" style="margin-top:14px">
+        <button id="pumpOn" type="button">BẬT BƠM</button>
+        <button id="pumpOff" type="button">TẮT BƠM</button>
+      </div>
+    </article>
+    <article class="panel">
+      <h3>Điều khiển quạt</h3>
+      <div class="device-row"><span>Trạng thái</span><span class="state" id="fanState">Chưa xác định</span></div>
+      <div class="mode-row" style="margin-top:14px">
+        <button id="fanOn" type="button">BẬT QUẠT</button>
+        <button id="fanOff" type="button">TẮT QUẠT</button>
+      </div>
+    </article>
+  </section>
+
+  <h2>Thông tin kết nối</h2>
+  <div class="info">
+    Broker: <b>broker.hivemq.com</b><br>
+    Giao thức trình duyệt: MQTT over WebSocket<br>
+    Topic nhiệt độ: <span class="topic">lab2_nhom05/esp32/temperature</span><br>
+    Topic độ ẩm: <span class="topic">lab2_nhom05/esp32/humidity</span><br>
+    Topic chế độ: <span class="topic">lab2_nhom05/esp32/mode</span><br>
+    Topic bơm: <span class="topic">lab2_nhom05/esp32/pump</span><br>
+    Topic quạt: <span class="topic">lab2_nhom05/esp32/fan</span><br>
+    Cập nhật gần nhất: <span id="updated">Chưa có dữ liệu</span>
+  </div>
+</main>
+<footer>ESP32 · DHT22 · FreeRTOS · MQTT</footer>
+
+<script>
+  const brokerUrl = "ws://broker.hivemq.com:8000/mqtt";
+  const topics = {
+    temp: "lab2_nhom05/esp32/temperature",
+    humi: "lab2_nhom05/esp32/humidity",
+    mode: "lab2_nhom05/esp32/mode",
+    pump: "lab2_nhom05/esp32/pump",
+    fan: "lab2_nhom05/esp32/fan"
+  };
+
+  const statusEl = document.getElementById("connection");
+  const client = mqtt.connect(brokerUrl, {
+    clientId: "web_dashboard_" + Math.random().toString(16).slice(2, 10),
+    clean: true, connectTimeout: 10000, reconnectPeriod: 3000
+  });
+
+  const tempChart = makeChart("temperatureChart", "Nhiệt độ", "°C");
+  const humiChart = makeChart("humidityChart", "Độ ẩm", "%");
+
+  function makeChart(id, label, unit) {
+    return new Chart(document.getElementById(id), {
+      type: "line",
+      data: { labels: [], datasets: [{ label, data: [], borderWidth: 2, pointRadius: 2, tension: .25 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: { x: { title: { display: true, text: "Thời gian" } },
+                  y: { title: { display: true, text: unit }, beginAtZero: false } }
+      }
+    });
+  }
+
+  function addPoint(chart, value, time) {
+    chart.data.labels.push(time);
+    chart.data.datasets[0].data.push(value);
+    if (chart.data.labels.length > 20) {
+      chart.data.labels.shift(); chart.data.datasets[0].data.shift();
+    }
+    chart.update("none");
+  }
+
+  function setState(id, isOn) {
+    const el = document.getElementById(id);
+    el.textContent = isOn ? "ĐANG BẬT" : "ĐANG TẮT";
+    el.classList.toggle("on", isOn);
+  }
+
+  function publish(topic, value) {
+    if (!client.connected) { alert("MQTT chưa kết nối. Hãy đợi kết nối rồi thử lại."); return; }
+    client.publish(topic, value, { qos: 0, retain: true });
+  }
+
+  function setMode(mode) {
+    publish(topics.mode, mode);
+    document.getElementById("modeState").textContent = mode;
+    document.getElementById("autoBtn").classList.toggle("active", mode === "AUTO");
+    document.getElementById("manualBtn").classList.toggle("active", mode === "MANUAL");
+  }
+
+  document.getElementById("autoBtn").onclick = () => setMode("AUTO");
+  document.getElementById("manualBtn").onclick = () => setMode("MANUAL");
+  document.getElementById("pumpOn").onclick = () => { setMode("MANUAL"); publish(topics.pump, "ON"); setState("pumpState", true); };
+  document.getElementById("pumpOff").onclick = () => { setMode("MANUAL"); publish(topics.pump, "OFF"); setState("pumpState", false); };
+  document.getElementById("fanOn").onclick = () => { setMode("MANUAL"); publish(topics.fan, "ON"); setState("fanState", true); };
+  document.getElementById("fanOff").onclick = () => { setMode("MANUAL"); publish(topics.fan, "OFF"); setState("fanState", false); };
+
+  client.on("connect", () => {
+    statusEl.textContent = "Đã kết nối MQTT";
+    statusEl.style.background = "#247a4b";
+    client.subscribe([topics.temp, topics.humi, topics.mode, topics.pump, topics.fan]);
+  });
+  client.on("reconnect", () => {
+    statusEl.textContent = "Đang kết nối lại...";
+    statusEl.style.background = "#8a4b12";
+  });
+  client.on("error", err => {
+    statusEl.textContent = "Lỗi MQTT - xem Console";
+    statusEl.style.background = "#a83232";
+    console.error(err);
+  });
+  client.on("message", (topic, payload) => {
+    const valueText = payload.toString();
+    const value = Number(valueText);
+    const now = new Date().toLocaleTimeString("vi-VN");
+
+    if (topic === topics.temp && Number.isFinite(value)) {
+      document.getElementById("temperature").textContent = value.toFixed(1);
+      addPoint(tempChart, value, now);
+      document.getElementById("updated").textContent = now;
+    } else if (topic === topics.humi && Number.isFinite(value)) {
+      document.getElementById("humidity").textContent = value.toFixed(1);
+      addPoint(humiChart, value, now);
+      document.getElementById("updated").textContent = now;
+    } else if (topic === topics.mode) {
+      const mode = valueText.toUpperCase();
+      document.getElementById("modeState").textContent = mode;
+      document.getElementById("autoBtn").classList.toggle("active", mode === "AUTO");
+      document.getElementById("manualBtn").classList.toggle("active", mode === "MANUAL");
+    } else if (topic === topics.pump) {
+      setState("pumpState", valueText.toUpperCase() === "ON");
+    } else if (topic === topics.fan) {
+      setState("fanState", valueText.toUpperCase() === "ON");
+    }
+  });
+  window.addEventListener("beforeunload", () => client.end());
+</script>
+</body>
+</html>
